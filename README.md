@@ -5,10 +5,10 @@ stored in a database, and measured against a 99.9% availability SLA.
 
 | | |
 |---|---|
-| **Dashboard** | `PLACEHOLDER_WEB_URL` |
-| **API (Cloudflare Worker)** | `PLACEHOLDER_API_URL` |
-| **Health check** | `PLACEHOLDER_API_URL/api/health` |
-| **Last verified live** | `PLACEHOLDER_VERIFIED` |
+| **Dashboard** | `https://sla-monitoring-dashboard.sla-monitoring-api.workers.dev` |
+| **API (Cloudflare Worker)** | `https://sla-monitoring-api.sla-monitoring-api.workers.dev` |
+| **Health check** | `https://sla-monitoring-api.sla-monitoring-api.workers.dev/api/health` |
+| **Last verified live** | `2026-09-21 — both URLs responding, two datasets loaded` |
 
 ---
 
@@ -29,7 +29,7 @@ stored in a database, and measured against a 99.9% availability SLA.
 
 | Layer | Choice | Reasoning |
 |---|---|---|
-| UI | React + Vite on **Cloudflare Pages** | Static hosting, free, no card. The page holds no business logic — it renders whatever the API returns. |
+| UI | React + Vite, served as a **static-assets Worker** | Static hosting, free, no card. The page holds no business logic — it renders whatever the API returns. (Cloudflare Pages is now part of Workers; the project deploys with `wrangler deploy` and an `[assets]` block, no server code.) |
 | Function | **Cloudflare Worker** | Genuinely serverless and free without a credit card. AWS and GCP free tiers both require a card on file, which the brief rules out. |
 | Database | **Cloudflare D1** (SQLite) | Explicitly permitted, free, real SQL with window functions (needed for percentiles), and no connection pooling to manage from a Worker. |
 
@@ -318,13 +318,13 @@ npx wrangler deploy                            # prints the API URL
 
 cd ../web
 echo "VITE_API_BASE=https://<your-api-url>" > .env.production
-npm run deploy                                 # Cloudflare Pages
+npm run deploy                                 # builds, then wrangler deploy
 ```
 
 ### Staying live
 
-Both Workers and Pages free tiers are always-on with no idle suspension, so this
-does not sleep. Free-tier ceilings that matter: 100,000 Worker requests/day
+Both the API and the static-asset Worker are always-on with no idle suspension,
+so this does not sleep. Free-tier ceilings that matter: 100,000 Worker requests/day
 (a 30-day file costs 34) and 100,000 D1 row writes/day (~14,400 per upload).
 Normal review traffic is nowhere near either.
 
