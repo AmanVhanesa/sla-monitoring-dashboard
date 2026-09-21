@@ -1,0 +1,19 @@
+{
+  "name": "sla-monitoring-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy",
+    "db:create": "wrangler d1 create sla-monitoring",
+    "db:migrate": "wrangler d1 execute sla-monitoring --remote --file=./schema.sql",
+    "db:migrate:local": "wrangler d1 execute sla-monitoring --local --file=./schema.sql",
+    "test": "node --test --experimental-strip-types test/*.test.ts"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250906.0",
+    "typescript": "^5.6.3",
+    "wrangler": "^4.20.0"
+  }
+}
