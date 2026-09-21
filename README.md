@@ -5,10 +5,10 @@ stored in a database, and measured against a 99.9% availability SLA.
 
 | | |
 |---|---|
-| **Dashboard** | `https://sla-monitoring-dashboard.sla-monitoring-api.workers.dev` |
-| **API (Cloudflare Worker)** | `https://sla-monitoring-api.sla-monitoring-api.workers.dev` |
-| **Health check** | `https://sla-monitoring-api.sla-monitoring-api.workers.dev/api/health` |
-| **Last verified live** | `2026-09-21 — both URLs responding, two datasets loaded` |
+| **Dashboard** | `https://dashboard.sla-monitoring-api.workers.dev` |
+| **API (Cloudflare Worker)** | `https://api.sla-monitoring-api.workers.dev` |
+| **Health check** | `https://api.sla-monitoring-api.workers.dev/api/health` |
+| **Last verified live** | `21 Sep 2026 — both URLs responding, three datasets loaded (9, 12 and 30 day windows)` |
 
 ---
 

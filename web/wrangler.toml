@@ -1,7 +1,7 @@
 # The dashboard is static files only - no server code. Cloudflare serves the
 # built bundle directly and falls back to index.html so client-side routing and
 # deep links work.
-name = "sla-monitoring-dashboard"
+name = "dashboard"
 compatibility_date = "2025-09-01"
 
 [observability]

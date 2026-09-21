@@ -1,4 +1,4 @@
-name = "sla-monitoring-api"
+name = "api"
 main = "src/index.ts"
 compatibility_date = "2025-09-01"
 
