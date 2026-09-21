@@ -123,12 +123,23 @@ describe('groupIncidents', () => {
     assert.equal(incidents[0].failedChecks, 4);
   });
 
-  test('a gap wider than one interval ends the incident', () => {
-    // 04:00 and 04:15 fail, 04:30 is healthy and not slow, 04:45 fails again.
-    // Nothing links the two, so this is one 30 minute incident plus a lone
-    // failure that does not qualify.
+  test('one healthy check does not end an outage that resumes straight after', () => {
+    // The auth-api outage did exactly this: it returned a single normal 200
+    // mid-outage and then failed for hours more.
     const incidents = groupIncidents(
       [down('2025-04-22T04:00:00Z'), down('2025-04-22T04:15:00Z'), down('2025-04-22T04:45:00Z')],
+      15,
+    );
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0].durationMinutes, 60);
+    assert.equal(incidents[0].failedChecks, 3);
+  });
+
+  test('two healthy checks in a row do end it', () => {
+    // 04:15 then 05:00 is a 45 minute gap - a full half hour of recovery -
+    // so these are two separate events, and neither reaches two checks.
+    const incidents = groupIncidents(
+      [down('2025-04-22T04:00:00Z'), down('2025-04-22T04:15:00Z'), down('2025-04-22T05:00:00Z')],
       15,
     );
     assert.equal(incidents.length, 1);

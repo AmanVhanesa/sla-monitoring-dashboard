@@ -80,6 +80,22 @@ export function availabilityOf(upChecks: number, downChecks: number): number | n
  */
 export const SLOW_MULTIPLE_OF_MEDIAN = 3;
 
+/**
+ * How many fully healthy checks an incident may span before it is considered
+ * over.
+ *
+ * A long outage in this data is not a solid block of failures. During the
+ * six-hour auth-api outage the service briefly returned a normal 200 in 426ms
+ * before failing again for another three hours. Ending the incident there
+ * reports one outage as three, which misstates both its severity and its
+ * duration. Real incident tooling groups flapping alerts the same way.
+ *
+ * One is deliberate rather than generous: two consecutive healthy checks (a
+ * full 30 minutes of recovery) is treated as genuinely recovered, so unrelated
+ * failures later in the day stay separate incidents.
+ */
+export const RECOVERED_CHECKS_BRIDGED = 1;
+
 export interface ImpairedCheck {
   serviceId: string;
   serviceName: string;
@@ -113,7 +129,8 @@ export function groupIncidents(
   minConsecutive = 2,
 ): Incident[] {
   const intervalMs = intervalMinutes * 60_000;
-  const tolerance = intervalMs * 1.5;
+  // The 1.2 leaves room for agent clock jitter without reaching the next slot.
+  const maxGapMs = intervalMs * (1 + RECOVERED_CHECKS_BRIDGED) * 1.2;
   const incidents: Incident[] = [];
 
   let run: ImpairedCheck[] = [];
@@ -144,7 +161,7 @@ export function groupIncidents(
     }
     const previous = run[run.length - 1];
     const sameService = previous.serviceId === check.serviceId;
-    const contiguous = new Date(check.ts).getTime() - new Date(previous.ts).getTime() <= tolerance;
+    const contiguous = new Date(check.ts).getTime() - new Date(previous.ts).getTime() <= maxGapMs;
 
     if (sameService && contiguous) {
       run.push(check);

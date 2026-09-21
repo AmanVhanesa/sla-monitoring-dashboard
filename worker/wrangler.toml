@@ -8,4 +8,4 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "sla-monitoring"
-database_id = "00000000-0000-0000-0000-000000000000"
+database_id = "0d085522-8493-4491-a7c3-1b1932ce46be"
