@@ -1,0 +1,11 @@
+name = "sla-monitoring-api"
+main = "src/index.ts"
+compatibility_date = "2025-09-01"
+
+[observability]
+enabled = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "sla-monitoring"
+database_id = "PLACEHOLDER_FILLED_BY_WRANGLER_D1_CREATE"
