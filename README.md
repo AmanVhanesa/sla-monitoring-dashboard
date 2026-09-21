@@ -324,9 +324,31 @@ npm run deploy                                 # builds, then wrangler deploy
 ### Staying live
 
 Both the API and the static-asset Worker are always-on with no idle suspension,
-so this does not sleep. Free-tier ceilings that matter: 100,000 Worker requests/day
-(a 30-day file costs 34) and 100,000 D1 row writes/day (~14,400 per upload).
-Normal review traffic is nowhere near either.
+so this does not sleep.
+
+**The dashboard is pre-loaded with three datasets (9, 12 and 30 day windows), so
+it can be reviewed without uploading anything.**
+
+Free-tier ceilings that matter:
+
+| Limit | Cost per 30-day upload |
+|---|---|
+| 100,000 Worker requests/day | 34 requests |
+| 100,000 D1 rows written/day | ~31,000 |
+| 5,000,000 D1 rows read/day | ~72,000 per dashboard load |
+
+That write figure is the one that bites, and it taught me something worth
+recording: **D1 bills a row written for every secondary index entry, not just
+for the table row.** The schema originally carried three indexes on `checks`,
+so a 15,577-row file cost roughly 62,000 billed writes rather than 15,577 —
+and four uploads in an afternoon tripped the daily cap. Reads and stored data
+were unaffected, but further uploads were refused until the window reset.
+
+Cutting back to a single index (see `schema.sql`) halved the cost per upload
+with no measurable query slowdown at this data size, because service and
+outcome filters narrow within an already-small day range and the primary key
+still covers per-service lookups. If you do hit the cap while reviewing, reads
+keep working and uploads resume at 00:00 UTC.
 
 ---
 
@@ -354,3 +376,8 @@ Normal review traffic is nowhere near either.
 - **Test the SQL, not just the pure functions.** The 39 tests cover the cleaning
   and grouping logic; the aggregation queries are verified by hand against the
   five sample files. They deserve a test harness against a real D1 instance.
+- **Budget writes explicitly.** I sized the indexes for query shape and ignored
+  what they cost to maintain, which is how the write cap got hit (see *Staying
+  live*). On a metered store, an index is a running cost, not a free speedup —
+  I would measure billed writes per upload as part of the schema design rather
+  than discovering it from a quota email.

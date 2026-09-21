@@ -52,9 +52,19 @@ CREATE TABLE IF NOT EXISTS checks (
   PRIMARY KEY (upload_id, service_id, ts)
 ) WITHOUT ROWID;
 
-CREATE INDEX IF NOT EXISTS idx_checks_day     ON checks (upload_id, day);
-CREATE INDEX IF NOT EXISTS idx_checks_service ON checks (upload_id, service_id, day);
-CREATE INDEX IF NOT EXISTS idx_checks_outcome ON checks (upload_id, outcome, ts);
+-- Exactly one secondary index, on purpose.
+--
+-- D1 bills a "row written" for every secondary index entry as well as for the
+-- table row itself, so each extra index multiplies the cost of an upload. An
+-- earlier version carried three of them, which turned a 15,577 row file into
+-- roughly 62,000 billed writes and burned through the 100,000/day free tier
+-- allowance in four uploads.
+--
+-- This one covers the date filtering the dashboard leads with. Service and
+-- outcome filters narrow within an already-small day range, and the primary
+-- key (upload_id, service_id, ts) still covers per-service lookups, so the
+-- other two indexes bought very little for a 2x write cost.
+CREATE INDEX IF NOT EXISTS idx_checks_day ON checks (upload_id, day);
 
 -- Rows the function refused to store, so the dashboard can show what was
 -- dropped instead of silently losing it.
