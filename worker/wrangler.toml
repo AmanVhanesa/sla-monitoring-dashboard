@@ -8,4 +8,4 @@ enabled = true
 [[d1_databases]]
 binding = "DB"
 database_name = "sla-monitoring"
-database_id = "PLACEHOLDER_FILLED_BY_WRANGLER_D1_CREATE"
+database_id = "00000000-0000-0000-0000-000000000000"

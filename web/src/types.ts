@@ -48,6 +48,8 @@ export interface ServiceStats {
   downtimeMinutes: number;
   errorBudgetMinutes: number;
   errorBudgetUsedPct: number | null;
+  degradedChecks: number;
+  slowThresholdMs: number | null;
   latency: LatencyStats | null;
 }
 
@@ -58,6 +60,7 @@ export interface Incident {
   end: string;
   durationMinutes: number;
   failedChecks: number;
+  degradedChecks: number;
 }
 
 export interface DailyPoint {

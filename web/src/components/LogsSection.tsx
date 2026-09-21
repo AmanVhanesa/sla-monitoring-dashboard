@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { fetchLogs } from '../api';
-import type { LogsResponse, ServiceStats, Upload } from '../types';
+import type { CheckRow, LogsResponse, ServiceStats, Upload } from '../types';
 import { formatInteger, formatMs, formatTimestamp } from '../format';
 
 interface Props {
@@ -10,6 +10,13 @@ interface Props {
 
 type DateMode = 'single' | 'range';
 
+function isSlow(row: CheckRow, thresholds: Map<string, number | null>): boolean {
+  const threshold = thresholds.get(row.serviceId);
+  return (
+    row.outcome === 'up' && row.latencyMs !== null && threshold != null && row.latencyMs > threshold
+  );
+}
+
 export function LogsSection({ upload, services }: Props) {
   const [mode, setMode] = useState<DateMode>('range');
   const [from, setFrom] = useState(upload.windowStart ?? '');
@@ -18,6 +25,13 @@ export function LogsSection({ upload, services }: Props) {
   const [outcome, setOutcome] = useState('');
   const [page, setPage] = useState(1);
   const [data, setData] = useState<LogsResponse | null>(null);
+
+  // The thresholds come from the stats call rather than a second query: a
+  // check that returned 200 but ran far slower than its service's median is
+  // worth seeing in the log, because that is what a brownout looks like.
+  const slowThresholds = new Map(
+    services.map((entry) => [entry.serviceId, entry.slowThresholdMs]),
+  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -188,7 +202,14 @@ export function LogsSection({ upload, services }: Props) {
                 <td>
                   <span className={`pill pill--${row.outcome}`}>{row.outcome}</span>
                 </td>
-                <td className="num mono">{formatMs(row.latencyMs)}</td>
+                <td className="num mono">
+                  {formatMs(row.latencyMs)}
+                  {isSlow(row, slowThresholds) && (
+                    <span className="pill pill--unknown slow-tag" title="Succeeded, but far slower than this service's median">
+                      slow
+                    </span>
+                  )}
+                </td>
                 <td className="muted mono">
                   {row.latencyRaw === null
                     ? 'blank'

@@ -323,3 +323,5 @@ p { margin: 0; }
   .masthead { flex-direction: column; align-items: stretch; }
   .filters { flex-direction: column; align-items: stretch; }
 }
+
+.slow-tag { margin-left: 6px; }

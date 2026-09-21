@@ -1,8 +1,19 @@
 import { test, describe } from 'node:test';
 import assert from 'node:assert/strict';
 import { availabilityOf, groupIncidents, SLA_TARGET } from '../src/stats.ts';
+import type { ImpairedCheck } from '../src/stats.ts';
 
-const svc = (ts: string) => ({ serviceId: 'svc-auth', serviceName: 'auth-api', ts });
+const down = (ts: string, serviceId = 'svc-auth'): ImpairedCheck => ({
+  serviceId,
+  serviceName: serviceId.replace('svc-', '') + '-api',
+  ts,
+  state: 'down',
+});
+
+const slow = (ts: string, serviceId = 'svc-auth'): ImpairedCheck => ({
+  ...down(ts, serviceId),
+  state: 'degraded',
+});
 
 describe('availabilityOf', () => {
   test('is the share of evaluated checks that succeeded', () => {
@@ -26,7 +37,7 @@ describe('availabilityOf', () => {
 describe('groupIncidents', () => {
   test('joins consecutive failures into one incident and extends it by one interval', () => {
     const incidents = groupIncidents(
-      [svc('2025-04-22T04:00:00Z'), svc('2025-04-22T04:15:00Z'), svc('2025-04-22T04:30:00Z')],
+      [down('2025-04-22T04:00:00Z'), down('2025-04-22T04:15:00Z'), down('2025-04-22T04:30:00Z')],
       15,
     );
     assert.equal(incidents.length, 1);
@@ -34,19 +45,49 @@ describe('groupIncidents', () => {
     assert.equal(incidents[0].end, '2025-04-22T04:45:00Z');
     assert.equal(incidents[0].durationMinutes, 45);
     assert.equal(incidents[0].failedChecks, 3);
+    assert.equal(incidents[0].degradedChecks, 0);
+  });
+
+  test('a slow but successful check holds a flapping outage together', () => {
+    // This is the shape of the seeded reports-api outage: 5xx, 5xx, a 200 that
+    // took 3x the median, then 5xx again. Grouping only the failures would
+    // report two unrelated blips instead of one continuous degradation.
+    const incidents = groupIncidents(
+      [
+        down('2025-05-13T16:00:00Z'),
+        down('2025-05-13T16:15:00Z'),
+        slow('2025-05-13T16:30:00Z'),
+        down('2025-05-13T16:45:00Z'),
+        slow('2025-05-13T17:00:00Z'),
+        down('2025-05-13T17:15:00Z'),
+      ],
+      15,
+    );
+    assert.equal(incidents.length, 1);
+    assert.equal(incidents[0].durationMinutes, 90);
+    assert.equal(incidents[0].failedChecks, 4);
+    assert.equal(incidents[0].degradedChecks, 2);
+  });
+
+  test('a slow patch with no failure at all is not called an outage', () => {
+    const incidents = groupIncidents(
+      [slow('2025-04-22T04:00:00Z'), slow('2025-04-22T04:15:00Z'), slow('2025-04-22T04:30:00Z')],
+      15,
+    );
+    assert.deepEqual(incidents, []);
   });
 
   test('discards an isolated failure as noise', () => {
-    assert.deepEqual(groupIncidents([svc('2025-04-22T04:00:00Z')], 15), []);
+    assert.deepEqual(groupIncidents([down('2025-04-22T04:00:00Z')], 15), []);
   });
 
-  test('splits a run when the failures are not adjacent', () => {
+  test('splits a run when the checks are not adjacent', () => {
     const incidents = groupIncidents(
       [
-        svc('2025-04-22T04:00:00Z'),
-        svc('2025-04-22T04:15:00Z'),
-        svc('2025-04-22T09:00:00Z'),
-        svc('2025-04-22T09:15:00Z'),
+        down('2025-04-22T04:00:00Z'),
+        down('2025-04-22T04:15:00Z'),
+        down('2025-04-22T09:00:00Z'),
+        down('2025-04-22T09:15:00Z'),
       ],
       15,
     );
@@ -56,29 +97,26 @@ describe('groupIncidents', () => {
   test('never merges failures from two different services', () => {
     const incidents = groupIncidents(
       [
-        { serviceId: 'svc-auth', serviceName: 'auth-api', ts: '2025-04-22T04:00:00Z' },
-        { serviceId: 'svc-auth', serviceName: 'auth-api', ts: '2025-04-22T04:15:00Z' },
-        { serviceId: 'svc-search', serviceName: 'search-api', ts: '2025-04-22T04:30:00Z' },
-        { serviceId: 'svc-search', serviceName: 'search-api', ts: '2025-04-22T04:45:00Z' },
+        down('2025-04-22T04:00:00Z', 'svc-auth'),
+        down('2025-04-22T04:15:00Z', 'svc-auth'),
+        down('2025-04-22T04:30:00Z', 'svc-search'),
+        down('2025-04-22T04:45:00Z', 'svc-search'),
       ],
       15,
     );
     assert.equal(incidents.length, 2);
-    assert.deepEqual(
-      incidents.map((i) => i.serviceId).sort(),
-      ['svc-auth', 'svc-search'],
-    );
+    assert.deepEqual(incidents.map((i) => i.serviceId).sort(), ['svc-auth', 'svc-search']);
   });
 
   test('ranks the longest outage first, which is what an on-call engineer opens', () => {
     const incidents = groupIncidents(
       [
-        svc('2025-04-22T04:00:00Z'),
-        svc('2025-04-22T04:15:00Z'),
-        svc('2025-04-22T20:00:00Z'),
-        svc('2025-04-22T20:15:00Z'),
-        svc('2025-04-22T20:30:00Z'),
-        svc('2025-04-22T20:45:00Z'),
+        down('2025-04-22T04:00:00Z'),
+        down('2025-04-22T04:15:00Z'),
+        down('2025-04-22T20:00:00Z'),
+        down('2025-04-22T20:15:00Z'),
+        down('2025-04-22T20:30:00Z'),
+        down('2025-04-22T20:45:00Z'),
       ],
       15,
     );
@@ -86,14 +124,11 @@ describe('groupIncidents', () => {
   });
 
   test('a gap wider than one interval ends the incident', () => {
-    // 04:00 and 04:15 fail, 04:30 is never reported, 04:45 fails again.
-    // We define an incident as *consecutive* failed checks, so this is one
-    // 30 minute incident plus a lone failure that does not qualify. Being
-    // strict keeps the rule explainable; the deduped data has no gaps, so it
-    // changes nothing here. A configurable gap tolerance is listed in the
-    // README as future work.
+    // 04:00 and 04:15 fail, 04:30 is healthy and not slow, 04:45 fails again.
+    // Nothing links the two, so this is one 30 minute incident plus a lone
+    // failure that does not qualify.
     const incidents = groupIncidents(
-      [svc('2025-04-22T04:00:00Z'), svc('2025-04-22T04:15:00Z'), svc('2025-04-22T04:45:00Z')],
+      [down('2025-04-22T04:00:00Z'), down('2025-04-22T04:15:00Z'), down('2025-04-22T04:45:00Z')],
       15,
     );
     assert.equal(incidents.length, 1);

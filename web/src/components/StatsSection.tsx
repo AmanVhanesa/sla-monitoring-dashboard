@@ -54,6 +54,7 @@ export function StatsSection({ stats }: Props) {
                   <th className="num">p50</th>
                   <th className="num">p95</th>
                   <th className="num">p99</th>
+                  <th className="num">Slow</th>
                   <th className="num">Checks</th>
                 </tr>
               </thead>
@@ -80,6 +81,18 @@ export function StatsSection({ stats }: Props) {
                     <td className="num mono">{formatMs(service.latency?.p50 ?? null)}</td>
                     <td className="num mono">{formatMs(service.latency?.p95 ?? null)}</td>
                     <td className="num mono">{formatMs(service.latency?.p99 ?? null)}</td>
+                    <td className="num mono">
+                      {service.degradedChecks > 0 ? (
+                        <span
+                          className="pill pill--unknown"
+                          title={`Succeeded but slower than ${formatMs(service.slowThresholdMs)}`}
+                        >
+                          {service.degradedChecks}
+                        </span>
+                      ) : (
+                        <span className="muted">0</span>
+                      )}
+                    </td>
                     <td className="num mono">{formatInteger(service.evaluatedChecks)}</td>
                   </tr>
                 ))}
@@ -91,7 +104,7 @@ export function StatsSection({ stats }: Props) {
             <div>
               <h3>
                 Incidents
-                <span className="muted"> &middot; two or more consecutive failed checks</span>
+                <span className="muted"> &middot; failed or unusually slow checks, grouped</span>
               </h3>
               {incidents.length === 0 ? (
                 <p className="muted">
@@ -111,7 +124,12 @@ export function StatsSection({ stats }: Props) {
                       <span className="muted mono">
                         {formatTimestamp(incident.start)} &rarr; {formatTimestamp(incident.end)}
                       </span>
-                      <span className="muted">{incident.failedChecks} failed checks</span>
+                      <span className="muted">
+                        {incident.failedChecks} failed
+                        {incident.degradedChecks > 0
+                          ? ` + ${incident.degradedChecks} slow but successful`
+                          : ''}
+                      </span>
                     </li>
                   ))}
                 </ul>

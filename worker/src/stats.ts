@@ -21,6 +21,8 @@ export interface ServiceStats {
   downtimeMinutes: number;
   errorBudgetMinutes: number;
   errorBudgetUsedPct: number | null;
+  degradedChecks: number;
+  slowThresholdMs: number | null;
   latency: LatencyStats | null;
 }
 
@@ -41,6 +43,7 @@ export interface Incident {
   end: string;
   durationMinutes: number;
   failedChecks: number;
+  degradedChecks: number;
 }
 
 export interface DailyPoint {
@@ -66,17 +69,46 @@ export function availabilityOf(upChecks: number, downChecks: number): number | n
 }
 
 /**
- * Group consecutive failed checks into incidents.
+ * A check that returned 200 but took more than this multiple of its service's
+ * median latency is treated as impaired rather than healthy.
  *
- * A single isolated 5xx is background noise - a retry would very likely have
- * succeeded - so an incident requires at least `minConsecutive` failures in a
- * row. A gap larger than one check interval (with tolerance for jitter) ends
- * the run. The end timestamp is pushed forward by one interval because a check
- * only tells us the service was failing at that moment; the outage is assumed
- * to last until the next successful probe.
+ * The median is used because it barely moves during an outage, so the
+ * threshold does not drift upwards as the incident it is meant to detect gets
+ * worse. The multiplier is a judgement call: on this data it cleanly separates
+ * a brownout (2.2-3.0s against a 644ms median) from ordinary jitter (never
+ * above 863ms). It is a constant so it can be tuned in one place.
+ */
+export const SLOW_MULTIPLE_OF_MEDIAN = 3;
+
+export interface ImpairedCheck {
+  serviceId: string;
+  serviceName: string;
+  ts: string;
+  state: 'down' | 'degraded';
+}
+
+/**
+ * Group consecutive impaired checks into incidents.
+ *
+ * Availability alone misrepresents what happened in this data. During the
+ * seeded reports-api outage the service alternated between 5xx and 200s that
+ * were three to five times slower than normal. Grouping only the failures
+ * reports two unrelated 30 minute blips; grouping impaired checks reports the
+ * single continuous degradation an engineer would actually have been paged for.
+ *
+ * A run still has to contain at least one real failure to be called an
+ * incident, so a merely slow patch is not reported as an outage. Slow checks
+ * extend an incident but are never counted as downtime - the SLA figure stays
+ * strictly "did it return an error", which is what a billing credit rests on.
+ *
+ * A single isolated failure is background noise (a retry would very likely
+ * have succeeded), so a run must reach `minConsecutive` checks to qualify.
+ * The end timestamp is pushed forward by one interval because a check only
+ * proves the service was impaired at that instant; the outage is assumed to
+ * run until the next healthy probe.
  */
 export function groupIncidents(
-  downChecks: { serviceId: string; serviceName: string; ts: string }[],
+  impaired: ImpairedCheck[],
   intervalMinutes: number,
   minConsecutive = 2,
 ): Incident[] {
@@ -84,10 +116,11 @@ export function groupIncidents(
   const tolerance = intervalMs * 1.5;
   const incidents: Incident[] = [];
 
-  let run: { serviceId: string; serviceName: string; ts: string }[] = [];
+  let run: ImpairedCheck[] = [];
 
   const flush = () => {
-    if (run.length >= minConsecutive) {
+    const failures = run.filter((check) => check.state === 'down');
+    if (run.length >= minConsecutive && failures.length > 0) {
       const first = run[0];
       const last = run[run.length - 1];
       const endMs = new Date(last.ts).getTime() + intervalMs;
@@ -97,13 +130,14 @@ export function groupIncidents(
         start: first.ts,
         end: new Date(endMs).toISOString().replace('.000Z', 'Z'),
         durationMinutes: Math.round((endMs - new Date(first.ts).getTime()) / 60_000),
-        failedChecks: run.length,
+        failedChecks: failures.length,
+        degradedChecks: run.length - failures.length,
       });
     }
     run = [];
   };
 
-  for (const check of downChecks) {
+  for (const check of impaired) {
     if (run.length === 0) {
       run = [check];
       continue;
@@ -200,11 +234,35 @@ const DAILY_SQL = `
   ORDER BY day, service_id
 `;
 
-const DOWN_CHECKS_SQL = `
-  SELECT service_id, service_name, ts
-  FROM checks
-  WHERE upload_id = ?1 AND day >= ?2 AND day <= ?3 AND outcome = 'down'
-  ORDER BY service_id, ts
+/**
+ * Every check that was either failing or unusually slow, with the threshold
+ * that judged it. The per-service median is computed in the same statement so
+ * this stays one round trip and needs no per-service bind parameters.
+ */
+const IMPAIRED_SQL = `
+  WITH ranked AS (
+    SELECT service_id, latency_ms,
+           ROW_NUMBER() OVER (PARTITION BY service_id ORDER BY latency_ms) AS rank_in_service,
+           COUNT(*)     OVER (PARTITION BY service_id)                     AS sample_count
+    FROM checks
+    WHERE upload_id = ?1 AND day >= ?2 AND day <= ?3 AND latency_ms IS NOT NULL
+  ),
+  median AS (
+    SELECT service_id,
+           MAX(CASE WHEN rank_in_service = MAX(1, (sample_count * 50 + 99) / 100)
+                    THEN latency_ms END) AS p50
+    FROM ranked GROUP BY service_id
+  )
+  SELECT c.service_id, c.service_name, c.ts,
+         CASE WHEN c.outcome = 'down' THEN 'down' ELSE 'degraded' END AS state
+  FROM checks c
+  LEFT JOIN median m ON m.service_id = c.service_id
+  WHERE c.upload_id = ?1 AND c.day >= ?2 AND c.day <= ?3
+    AND (
+      c.outcome = 'down'
+      OR (c.outcome = 'up' AND m.p50 IS NOT NULL AND c.latency_ms > m.p50 * ?4)
+    )
+  ORDER BY c.service_id, c.ts
 `;
 
 export interface StatsResult {
@@ -228,7 +286,7 @@ export async function computeStats(
   to: string,
   intervalMinutes: number,
 ): Promise<StatsResult> {
-  const [outcomes, latencies, daily, downChecks] = await Promise.all([
+  const [outcomes, latencies, daily, impairedRows] = await Promise.all([
     db.prepare(OUTCOME_SQL).bind(uploadId, from, to).all<OutcomeRow>(),
     db.prepare(LATENCY_SQL).bind(uploadId, from, to).all<LatencyRow>(),
     db.prepare(DAILY_SQL).bind(uploadId, from, to).all<{
@@ -237,15 +295,30 @@ export async function computeStats(
       up_checks: number;
       down_checks: number;
     }>(),
-    db.prepare(DOWN_CHECKS_SQL).bind(uploadId, from, to).all<{
+    db.prepare(IMPAIRED_SQL).bind(uploadId, from, to, SLOW_MULTIPLE_OF_MEDIAN).all<{
       service_id: string;
       service_name: string;
       ts: string;
+      state: 'down' | 'degraded';
     }>(),
   ]);
 
   const latencyById = new Map<string, LatencyRow>();
   for (const row of latencies.results ?? []) latencyById.set(row.service_id, row);
+
+  const impaired: ImpairedCheck[] = (impairedRows.results ?? []).map((row) => ({
+    serviceId: row.service_id,
+    serviceName: row.service_name,
+    ts: row.ts,
+    state: row.state,
+  }));
+
+  const degradedById = new Map<string, number>();
+  for (const check of impaired) {
+    if (check.state === 'degraded') {
+      degradedById.set(check.serviceId, (degradedById.get(check.serviceId) ?? 0) + 1);
+    }
+  }
 
   const services: ServiceStats[] = (outcomes.results ?? []).map((row) => {
     const evaluated = row.up_checks + row.down_checks;
@@ -272,6 +345,9 @@ export async function computeStats(
       errorBudgetMinutes: Math.round(errorBudgetMinutes * 10) / 10,
       errorBudgetUsedPct:
         errorBudgetMinutes > 0 ? (downtimeMinutes / errorBudgetMinutes) * 100 : null,
+      degradedChecks: degradedById.get(row.service_id) ?? 0,
+      slowThresholdMs:
+        latency?.p50 != null ? Math.round(latency.p50 * SLOW_MULTIPLE_OF_MEDIAN) : null,
       latency: latency
         ? {
             p50: latency.p50,
@@ -286,14 +362,7 @@ export async function computeStats(
     };
   });
 
-  const incidents = groupIncidents(
-    (downChecks.results ?? []).map((r) => ({
-      serviceId: r.service_id,
-      serviceName: r.service_name,
-      ts: r.ts,
-    })),
-    intervalMinutes,
-  );
+  const incidents = groupIncidents(impaired, intervalMinutes);
 
   const totalUp = services.reduce((sum, s) => sum + s.upChecks, 0);
   const totalDown = services.reduce((sum, s) => sum + s.downChecks, 0);
